@@ -12,6 +12,7 @@ def parse_manifest_v3(manif):
     """
     manifest = {}
     annotations = []
+    annotation_motivations = set()
     
     if manif.get('@context', None) != 'http://iiif.io/api/presentation/3/context.json':
         logging.error(f"Manifest has no IIIF-V3 context: {manif['@context']}")
@@ -95,15 +96,28 @@ def parse_manifest_v3(manif):
                     return False
 
                 annotations.append(anno)
+                if 'motivation' in anno:
+                    annotation_motivations.add(anno['motivation'])
             
     logging.debug(f"found {len(annotations)} annotations.")
     manifest = {
         'id': manif_id,
         'label': manif_label,
         'items': manif_items,
-        'canvas_annotations': annotations
+        'annotations': annotations,
+        'annotation_motivations': annotation_motivations
     }
     return manifest
+
+def create_annopage(manifest):
+    """
+    Create AnnotationPage structure from manifest info
+    """
+    annopage = {
+        'type': 'AnnotationPage',
+    }
+    annopage['items'] = manifest['annotations']
+    return annopage
 
 
 def action_check(args):
@@ -117,8 +131,32 @@ def action_check(args):
     with open(args.input_manifest, "r") as file:
         manif = json.load(file)
         manifest = parse_manifest_v3(manif)
+        num_annos = len(manifest['annotations'])
+        logging.info(f"Manifest {manifest['id']} contains {num_annos} annotations.")
+        if num_annos > 0:
+            logging.info(f"  annotation motivations: {manifest['annotation_motivations']}")
+
+
+def action_extract(args):
+    """
+    Action: extract annotations from manifest and save as AnnotationPage.
+    """
+    if args.input_manifest is None:
+        sys.exit('ERROR: missing input_manifest parameter!')
+        
+    if args.output_annopage is None:
+        sys.exit('ERROR: missing output_annopage parameter!')
+        
+    logging.info(f"Reading file {args.input_manifest}")
+    with open(args.input_manifest, "r") as file:
+        manif = json.load(file)
+        manifest = parse_manifest_v3(manif)
         logging.info(f"Manifest {manifest['id']} contains {len(manifest['canvas_annotations'])} annotations.")
 
+    logging.info(f"Writing file {args.output_annopage}")
+    with open(args.output_annopage, "w") as file:
+        annopage = create_annopage(manifest)
+        json.dump(annopage, file)
 
 ##
 ## main
@@ -126,11 +164,14 @@ def action_check(args):
 def main():
     argp = argparse.ArgumentParser(description='Manipulate annotations in IIIF manifests.')
     argp.add_argument('--version', action='version', version='%(prog)s 1.0')
-    argp.add_argument('action', choices=['check'], 
+    argp.add_argument('action', choices=['check', 'extract'], 
                       default='check', 
-                      help='Action: check=check and print information on existing annotations.')
+                      help='Action: check=check and print information about annotations in manifest, '
+                      + 'extract=extract annotations from manifest.')
     argp.add_argument('-f', '--input-manifest', dest='input_manifest',
                       help='Input manifest file (JSON)')
+    argp.add_argument('-o', '--output-annopage', dest='output_annopage',
+                      help='Output AnnotationPage file (JSON)')
 
     argp.add_argument('-l', '--log', dest='loglevel', choices=['INFO', 'DEBUG', 'ERROR'], default='INFO', 
                       help='Log level.')
@@ -142,6 +183,9 @@ def main():
     # actions
     if args.action == 'check':
         action_check(args)
+        
+    elif args.action == 'extract':
+        action_extract(args)
 
 
 if __name__ == '__main__':
