@@ -149,8 +149,8 @@ def parse_annotationlist(annolist, annotation_info):
     loads external annotationlists via HTTP.
     """
     annotations = annotation_info['annotations']
-    annotation_targets = annotation_info['targets']
-    annotation_motivations = annotation_info['motivations']
+    targets = annotation_info['by_target']
+    motivations = annotation_info['motivations']
     
     annolist_id = annolist.get('@id', None)
     logging.debug(f"AnnotationList id: {annolist_id}")
@@ -173,8 +173,8 @@ def parse_annotationlist(annolist, annotation_info):
     for anno in annolist_items:
         anno_info = parse_annotation(anno)
         annotations.append(anno_info)
-        annotation_targets.add(anno_info['target'])
-        annotation_motivations.add(anno_info['motivation'])
+        targets[anno_info['target']] = anno_info
+        motivations.add(anno_info['motivation'])
 
 
 def parse_annotationpage(annopage, annotation_info):
@@ -184,8 +184,8 @@ def parse_annotationpage(annopage, annotation_info):
     loads external annotationpage via HTTP.
     """
     annotations = annotation_info['annotations']
-    annotation_targets = annotation_info['targets']
-    annotation_motivations = annotation_info['motivations']
+    targets = annotation_info['by_target']
+    motivations = annotation_info['motivations']
 
     annopage_id = annopage.get('id', None)
     logging.debug(f"AnnotationPage id: {annopage_id}")
@@ -208,8 +208,8 @@ def parse_annotationpage(annopage, annotation_info):
     for anno in annopage_items:
         anno_info = parse_annotation(anno)
         annotations.append(anno_info)
-        annotation_targets.add(anno_info['target'])
-        annotation_motivations.add(anno_info['motivation'])
+        targets[anno_info['target']] = anno_info
+        motivations.add(anno_info['motivation'])
 
 
 def parse_manifest(manif):
@@ -232,7 +232,7 @@ def parse_manifest_v2(manif):
     """
     annotation_info = {
         'annotations': [],
-        'targets': set(),
+        'by_target': dict(),
         'motivations': set()
     }
     canvas_ids = set()
@@ -309,7 +309,7 @@ def parse_manifest_v3(manif):
     """
     annotation_info = {
         'annotations': [],
-        'targets': set(),
+        'by_target': dict(),
         'motivations': set()
     }
     canvas_ids = set()
@@ -410,7 +410,7 @@ def action_check(args):
         num_annos = len(manifest_info['annotations']['annotations'])
         logging.info(f"IIIF V{manifest_info['manifest_version']} manifest {manifest_info['id']} contains {num_annos} annotations.")
         if num_annos > 0:
-            logging.info(f"  on {len(manifest_info['annotations']['targets'])} canvases")
+            logging.info(f"  on {len(manifest_info['annotations']['by_target'])} canvases")
             logging.info(f"  annotation motivations: {manifest_info['annotations']['motivations']}")
 
 
