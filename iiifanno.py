@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-from __future__ import annotations
 
 import argparse
 import json
 import logging
 import urllib.request
 import sys
+import os.path
+
+VERSION = '1.0'
 
 def open_file_or_url(url):
     """
@@ -18,6 +20,23 @@ def open_file_or_url(url):
     else:
         logging.info(f"  Loading resource from file {url}")
         return open(url, 'r')
+
+
+def save_json(data, filename, opts):
+    """
+    Save JSON data in file.
+    """
+    fn = filename
+    dir = opts.get('output_directory', None)
+    if dir:
+        fn = dir + '/' + fn
+        
+    logging.info(f"  Writing file {fn}")
+    if os.path.isfile(fn):
+        logging.warning(f"File {fn} will be overwritten.")
+        
+    with open(fn, 'w') as file:
+        json.dump(data, file)
 
 
 def get_string(val):
@@ -33,6 +52,22 @@ def get_string(val):
         return val[0]
     else:
         return repr(val)
+
+
+def put_add(item, key, val, single_item_list=True):
+    """
+    puts val in dict item at key, adds val to list if item already has value
+    """
+    oldval = item.get(key, None)
+    if oldval is None:
+        if single_item_list:
+            item[key] = [val]
+        else:
+            item[key] = val
+    elif isinstance(oldval, list):
+        oldval.append(val)
+    else:
+        item[key] = [oldval, val]
 
 
 def parse_annotation(anno):
@@ -142,12 +177,20 @@ def parse_annotation_v3(anno):
     return annotation_info
 
 
-def parse_annotationlist(annolist, annotation_info):
+def parse_annotationlist_v2(annolist, annotation_info):
     """
-    Parse annolist as sc:AnnotationList for annotations.
+    Parse annolist as V2 sc:AnnotationList for annotations.
     
-    loads external annotationlists via HTTP.
+    Stores results in annotation_info.
+    Loads external annotationlists via HTTP.
     """
+    if annotation_info is None:
+        annotation_info = {
+            'annotations': [],
+            'by_target': dict(),
+            'motivations': set()
+        }
+        
     annotations = annotation_info['annotations']
     targets = annotation_info['by_target']
     motivations = annotation_info['motivations']
@@ -164,7 +207,7 @@ def parse_annotationlist(annolist, annotation_info):
         # external AnnotationList
         with open_file_or_url(annolist_id) as file:
             ext_annolist = json.load(file)
-            return parse_annotationlist(ext_annolist, annotation_info)
+            return parse_annotationlist_v2(ext_annolist, annotation_info)
         
     annolist_items = annolist.get('resources', None)
     if  annolist_items is None or not isinstance(annolist_items, list):
@@ -173,69 +216,123 @@ def parse_annotationlist(annolist, annotation_info):
     for anno in annolist_items:
         anno_info = parse_annotation(anno)
         annotations.append(anno_info)
-        targets[anno_info['target']] = anno_info
+        put_add(targets, anno_info['target'], anno_info)
         motivations.add(anno_info['motivation'])
 
+    return annotation_info
 
-def parse_annotationpage(annopage, annotation_info):
+
+def parse_annotationlist_v3(annolist, annotation_info):
     """
-    Parse annopage as AnnotationPage for annotations.
+    Parse annolist as V3 AnnotationPage for annotations.
     
     loads external annotationpage via HTTP.
     """
+    if annotation_info is None:
+        annotation_info = {
+            'annotations': [],
+            'by_target': dict(),
+            'motivations': set()
+        }
+        
     annotations = annotation_info['annotations']
     targets = annotation_info['by_target']
     motivations = annotation_info['motivations']
 
-    annopage_id = annopage.get('id', None)
-    logging.debug(f"AnnotationPage id: {annopage_id}")
-    if  not annopage_id:
+    annolist_id = annolist.get('id', None)
+    logging.debug(f"AnnotationPage id: {annolist_id}")
+    if  not annolist_id:
         raise ValueError("AnnotationPage has no id")
     
-    if annopage.get('type', None) != 'AnnotationPage':
-        raise ValueError(f"AnnotationPage {annopage_id} not of type AnnotationPage")
+    if annolist.get('type', None) != 'AnnotationPage':
+        raise ValueError(f"AnnotationPage {annolist_id} not of type AnnotationPage")
 
-    if not 'items' in annopage:
+    if not 'items' in annolist:
         # external AnnotationPage
-        with open_file_or_url(annopage_id) as file:
-            ext_annopage = json.load(file)
-            return parse_annotationpage(ext_annopage, annotation_info)
+        with open_file_or_url(annolist_id) as file:
+            ext_annolist = json.load(file)
+            return parse_annotationlist_v3(ext_annolist, annotation_info)
 
-    annopage_items = annopage.get('items', None)
-    if  annopage_items is None or not isinstance(annopage_items, list):
+    annolist_items = annolist.get('items', None)
+    if  annolist_items is None or not isinstance(annolist_items, list):
         raise ValueError(f"AnnotationPage has no items!")
 
-    for anno in annopage_items:
+    for anno in annolist_items:
         anno_info = parse_annotation(anno)
         annotations.append(anno_info)
-        targets[anno_info['target']] = anno_info
+        put_add(targets, anno_info['target'], anno_info)
         motivations.add(anno_info['motivation'])
 
+    return annotation_info
 
-def parse_manifest(manif):
+
+def create_annotationlist_v2(manifest_info, annolist_id, annotation_infos, add_context=False):
+    """
+    Return V2 AnnotationList structure from annotation_infos
+    """
+    annolist = {
+        '@type': 'sc:AnnotationList',
+        '@id': annolist_id,
+        'within': manifest_info['id']
+    }
+    if add_context:
+        annolist['@context'] = 'http://iiif.io/api/presentation/2/context.json'
+        
+    annolist['resources'] = [ai['annotation'] for ai in annotation_infos]
+    return annolist
+
+
+def create_annotationlist_v3(manifest_info, annolist_id, annotation_infos, add_context=False):
+    """
+    Return V3 AnnotationPage structure from annotation_infos
+    """
+    annolist = {
+        'type': 'AnnotationPage',
+        'id': annolist_id,
+        'partOf': manifest_info['id']
+    }
+    if add_context:
+        annolist['@context'] = 'http://iiif.io/api/presentation/3/context.json'
+
+    annolist['items'] = [ai['annotation'] for ai in annotation_infos]
+    return annolist
+
+
+def parse_manifest(manif, manifest_info, opts):
     """
     parse V2 or V3 manifest for annotations
     """
+    if manifest_info is None:
+        annotation_info = {
+            'annotations': [],
+            'by_target': dict(),
+            'motivations': set()
+        }
+        manifest_info = {
+            'annotations': annotation_info,
+            'manifest': manif
+        }
+    
     ctx = manif.get('@context', None)
     if ctx == 'http://iiif.io/api/presentation/3/context.json':
-        return parse_manifest_v3(manif)
+        return parse_manifest_v3(manif, manifest_info, opts)
     
     elif ctx == 'http://iiif.io/api/presentation/2/context.json':
-        return parse_manifest_v2(manif)
+        return parse_manifest_v2(manif, manifest_info, opts)
     
     raise ValueError("No applicable JSON-LD context found! Manifest is not IIIF V2 or V3 manifest!")
 
 
-def parse_manifest_v2(manif):
+def parse_manifest_v2(manif, manifest_info, opts):
     """
-    parse IIIF V2 manifest for annotations
+    Parse IIIF V2 manifest for annotations.
+    
+    Reads into manifest_info if opts['mode'] == 'read'.
+    Inserts annotations from manifest_info into manif if  opts['mode'] == 'insert'.
     """
-    annotation_info = {
-        'annotations': [],
-        'by_target': dict(),
-        'motivations': set()
-    }
+    annotation_info = manifest_info['annotations']
     canvas_ids = set()
+    annolist_idx = 0
     
     if manif.get('@type', None) != 'sc:Manifest':
         raise ValueError("Manifest not of type Manifest")
@@ -281,38 +378,63 @@ def parse_manifest_v2(manif):
             canvas_images = canvas.get('images', None)
             if  canvas_images is None or not isinstance(canvas_images, list):
                 raise ValueError(f"Canvas {canvas_id} has no images")
-        
-            canvas_ids.add(canvas_id)
+
             canvas_annos = canvas.get('otherContent', None)
-            if  canvas_annos is None or not isinstance(canvas_annos, list):
-                # no annotationpages
-                continue
-        
-            for annopage in canvas_annos:
-                parse_annotationlist(annopage, annotation_info)
+            if opts['mode'] == 'read':
+                #
+                # read mode: record canvas id and annotations
+                #
+                canvas_ids.add(canvas_id)
+                if  canvas_annos is None or not isinstance(canvas_annos, list):
+                    # no annotationpages
+                    continue
+
+                for annolist in canvas_annos:
+                    parse_annotationlist_v2(annolist, annotation_info)
+                    
+            elif opts['mode'] == 'insert':
+                #
+                # insert mode
+                #
+                annotations = annotation_info['by_target'].get(canvas_id, None)
+                if annotations is None:
+                    continue
+                
+                annolist_idx += 1
+                annolist_id, annolist_fn = create_annotationlist_id(manifest_info, canvas_id, annolist_idx, opts)
+                if opts['reference_mode'] == 'inline':
+                    logging.warning("Inline AnnotationLists are not allowed in the IIIF V2 presentation API!")
+                    annolist = create_annotationlist_v2(manifest_info, annolist_id, annotations, add_context=False)
+                    canvas['otherContent'] = [annolist]
+                    
+                else:
+                    annolist = create_annotationlist_v2(manifest_info, annolist_id, annotations, add_context=True)
+                    save_json(annolist, annolist_fn, opts)
+                    canvas['otherContent'] = [{
+                        '@id': annolist_id,
+                        '@type': 'sc:AnnotationList'
+                    }]
             
-    logging.debug(f"found {len(annotation_info['annotations'])} annotations.")
-    manifest_info = {
-        'manifest_version': 2,
-        'id': manif_id,
-        'label': manif_label,
-        'canvas_ids': canvas_ids,
-        'annotations': annotation_info,
-        'manifest': manif
-    }
+    if opts['mode'] == 'read':
+        manifest_info['manifest_version'] = 2
+        manifest_info['id'] = manif_id
+        manifest_info['label'] = manif_label
+        manifest_info['canvas_ids'] = canvas_ids
+        
+    elif opts['mode'] == 'insert':
+        manif['@id'] = manifest_info['id']
+        manifest_info['manifest'] = manif
+
     return manifest_info
 
 
-def parse_manifest_v3(manif):
+def parse_manifest_v3(manif, manifest_info, opts):
     """
     parse IIIF V3 manifest for annotations
     """
-    annotation_info = {
-        'annotations': [],
-        'by_target': dict(),
-        'motivations': set()
-    }
+    annotation_info = manifest_info['annotations']
     canvas_ids = set()
+    annolist_idx = 0
     
     if manif.get('type', None) != 'Manifest':
         raise ValueError("Manifest not of type Manifest")
@@ -333,70 +455,113 @@ def parse_manifest_v3(manif):
     
     logging.debug(f"manifest has {len(manif_items)} items")
 
-    for item in manif_items:
-        canvas_id = item.get('id', None)
+    for canvas in manif_items:
+        canvas_id = canvas.get('id', None)
         logging.debug(f"canvas id: {canvas_id}")
         if  not canvas_id:
             raise ValueError("Canvas has no id")
         
-        if item.get('type', None) != 'Canvas':
+        if canvas.get('type', None) != 'Canvas':
             raise ValueError(f"Canvas {canvas_id} not of type Canvas")
     
-        canvas_label = item.get('label', None)
+        canvas_label = canvas.get('label', None)
         logging.debug(f"canvas label: {canvas_label}")
         if  not canvas_label:
             raise ValueError(f"Canvas {canvas_id} has no label")
         
-        canvas_items = item.get('items', None)
+        canvas_items = canvas.get('items', None)
         if  canvas_items is None or not isinstance(canvas_items, list):
             raise ValueError(f"Canvas {canvas_id} has no items")
     
         canvas_ids.add(canvas_id)
-        canvas_annos = item.get('annotations', None)
-        if  canvas_annos is None or not isinstance(canvas_annos, list):
-            # no annotationpages
-            continue
-    
-        for annopage in canvas_annos:
-            parse_annotationpage(annopage, annotation_info)
+        canvas_annos = canvas.get('annotations', None)
+        if opts['mode'] == 'read':
+            #
+            # read mode: record canvas id and annotations
+            #
+            canvas_ids.add(canvas_id)
+            if  canvas_annos is None or not isinstance(canvas_annos, list):
+                # no annotationpages
+                continue
+
+            for annolist in canvas_annos:
+                parse_annotationlist_v3(annolist, annotation_info)
+                
+        elif opts['mode'] == 'insert':
+            #
+            # insert mode
+            #
+            annotations = annotation_info['by_target'].get(canvas_id, None)
+            if annotations is None:
+                continue
             
-    logging.debug(f"found {len(annotation_info['annotations'])} annotations.")
-    manifest_info = {
-        'manifest_version': 3,
-        'id': manif_id,
-        'label': manif_label,
-        'canvas_ids': canvas_ids,
-        'annotations': annotation_info,
-        'manifest': manif
-    }
+            annolist_idx += 1
+            annolist_id, annolist_fn = create_annotationlist_id(manifest_info, canvas_id, annolist_idx, opts)
+            if opts['reference_mode'] == 'inline':
+                annolist = create_annotationlist_v3(manifest_info, annolist_id, annotations, add_context=False)
+                canvas['annotations'] = [annolist]
+                
+            else:
+                annolist = create_annotationlist_v3(manifest_info, annolist_id, annotations, add_context=True)
+                save_json(annolist, annolist_fn, opts)
+                canvas['annotations'] = [{
+                    'id': annolist_id,
+                    'type': 'AnnotationPage'
+                }]
+
+    if opts['mode'] == 'read':
+        manifest_info = {
+            'manifest_version': 3,
+            'id': manif_id,
+            'label': manif_label,
+            'canvas_ids': canvas_ids,
+            'annotations': annotation_info,
+            'manifest': manif
+        }
+        
+    elif opts['mode'] == 'insert':
+        manif['id'] = manifest_info['id']
+        manifest_info['manifest'] = manif
+        
     return manifest_info
 
 
-def create_annotationpage(manifest_info):
+def create_annotationlist_id(manifest_info, canvas_id, annolist_idx, opts):
     """
-    Create V3 AnnotationPage structure from manifest info
+    Return (uri, filename) for annotation list
     """
-    annopage = {
-        '@context': 'http://iiif.io/api/presentation/3/context.json',
-        'type': 'AnnotationPage',
-        'partOf': manifest_info['id']
-    }
-    annopage['items'] = manifest_info['annotations']['annotations']
-    return annopage
+    prefix = opts['url_prefix']
+    if not prefix:
+        # use manifest id as prefix
+        prefix = manifest_info['id']
+
+    scheme = opts['annolist_name_scheme']
+    if scheme == 'canvas':
+        # use last part of canvas id
+        canvas_part = canvas_id.split('/')[-1]
+        fn = canvas_part + '-annolist.json'
+        uri = prefix + '/' + fn
+    
+    else:
+        fn = f"annolist-{annolist_idx}.json"
+        uri = prefix + '/' + fn
+        
+    return uri, fn
 
 
-def create_annotationlist(manifest_info):
+def create_manifest_id(manifest_info, opts):
     """
-    Create V2 AnnotationList structure from manifest info
+    Return (uri, filename) for manifest
     """
-    annopage = {
-        '@context': 'http://iiif.io/api/presentation/2/context.json',
-        '@type': 'sc:AnnotationList',
-        'within': manifest_info['id']
-    }
-    annopage['resources'] = manifest_info['annotations']['annotations']
-    return annopage
+    prefix = opts['url_prefix']
+    if not prefix:
+        # use manifest id as prefix
+        prefix = manifest_info['id']
 
+    fn = opts['output_manifest']
+    uri = prefix + '/' + fn
+    return uri, fn
+    
 
 def action_check(args):
     """
@@ -408,7 +573,7 @@ def action_check(args):
     logging.info(f"Reading {args.input_manifest}")
     with open_file_or_url(args.input_manifest) as file:
         manif = json.load(file)
-        manifest_info = parse_manifest(manif)
+        manifest_info = parse_manifest(manif, None, {'mode': 'read'})
         num_annos = len(manifest_info['annotations']['annotations'])
         logging.info(f"IIIF V{manifest_info['manifest_version']} manifest {manifest_info['id']} contains {num_annos} annotations.")
         if num_annos > 0:
@@ -426,22 +591,24 @@ def action_extract(args):
     if args.output_file is None:
         sys.exit('ERROR: missing output_file parameter!')
         
-    logging.info(f"Reading file {args.input_manifest}")
+    logging.info(f"Reading manifest {args.input_manifest}")
     with open_file_or_url(args.input_manifest) as file:
         manif = json.load(file)
-        manifest_info = parse_manifest(manif)
+        manifest_info = parse_manifest(manif, None, {'mode': 'read'})
         num_annos = len(manifest_info['annotations']['annotations'])
         logging.info(f"IIIF V{manifest_info['manifest_version']} manifest {manifest_info['id']} contains {num_annos} annotations.")
 
-    with open(args.output_annotation_file, "w") as file:
-        if manifest_info['manifest_version'] == 2:
-            logging.info(f"Writing IIIF V2 annotation list {args.output_file}")
-            annopage = create_annotationlist(manifest_info)
-        else:
-            logging.info(f"Writing IIIF V3 annotation page {args.output_file}")
-            annopage = create_annotationpage(manifest_info)
-            
-        json.dump(annopage, file)
+    opts = vars(args)
+    annos = manifest_info['annotations']['annotations']
+    annolist_id, _ = create_annotationlist_id(manifest_info, None, 1, opts)
+    if manifest_info['manifest_version'] == 2:
+        logging.info(f"Writing IIIF V2 annotation list {args.output_file}")
+        annolist = create_annotationlist_v2(manifest_info, annolist_id, annos, add_context=True)
+    else:
+        logging.info(f"Writing IIIF V3 annotation page {args.output_file}")
+        annolist = create_annotationlist_v3(manifest_info, annolist_id, annos, add_context=True)
+        
+    save_json(annolist, args.output_file, opts)
 
 
 def action_insert(args):
@@ -451,25 +618,38 @@ def action_insert(args):
     if args.input_manifest is None:
         sys.exit('ERROR: missing input_manifest parameter!')
         
+    if args.input_file is None:
+        sys.exit('ERROR: missing input_file parameter!')
+        
     if args.output_manifest is None:
         sys.exit('ERROR: missing output_manifest parameter!')
         
-    logging.info(f"Reading file {args.input_manifest}")
+    logging.info(f"Reading manifest {args.input_manifest}")
     with open_file_or_url(args.input_manifest) as file:
         manif = json.load(file)
-        manifest_info = parse_manifest(manif)
+        manifest_info = parse_manifest(manif, None, {'mode': 'read'})
         num_annos = len(manifest_info['annotations']['annotations'])
         logging.info(f"IIIF V{manifest_info['manifest_version']} manifest {manifest_info['id']} contains {num_annos} annotations.")
 
-    with open(args.output_annotation_file, "w") as file:
+    logging.info(f"Reading annotation file {args.input_file}")
+    with open_file_or_url(args.input_file) as file:
+        annos = json.load(file)
         if manifest_info['manifest_version'] == 2:
-            logging.info(f"Writing IIIF V2 annotation list {args.output_file}")
-            annopage = create_annotationlist(manifest_info)
+            annotation_info = parse_annotationlist_v2(annos, None) 
+        
         else:
-            logging.info(f"Writing IIIF V3 annotation page {args.output_file}")
-            annopage = create_annotationpage(manifest_info)
-            
-        json.dump(annopage, file)
+            annotation_info = parse_annotationlist_v3(annos, None) 
+
+    opts = vars(args)
+    opts['mode'] = 'insert'
+    manifest_id, manifest_file = create_manifest_id(manifest_info, opts)
+    manifest_info['id'] = manifest_id
+    manifest_info['annotations'] = annotation_info
+    logging.info(f"Creating new manifest {manifest_id}")
+    # re-parse manifest, adding annotations and writing annotationlists
+    manifest_info = parse_manifest(manif, manifest_info, opts)
+    # save manifest
+    save_json(manifest_info['manifest'], manifest_file, opts)
 
 
 ##
@@ -477,14 +657,16 @@ def action_insert(args):
 ##
 def main():
     argp = argparse.ArgumentParser(description='Manipulate annotations in IIIF manifests.')
-    argp.add_argument('--version', action='version', version='%(prog)s 1.0')
-    argp.add_argument('action', choices=['check', 'extract', 'insert'], 
-                      default='check', 
+    argp.add_argument('--version', action='version', version='%(prog)s '+VERSION)
+    argp.add_argument('action', choices=['check', 'extract', 'insert'],
+                      default='check',
                       help='Action: check=check and print information about annotations in manifest, '
                       + 'extract=extract annotations from manifest.'
                       + 'insert=insert annotations and create new manifest.')
     argp.add_argument('-i', '--input-manifest', dest='input_manifest',
                       help='Input manifest file or URL (JSON)')
+    argp.add_argument('-if', '--input-file', dest='input_file',
+                      help='Input AnnotationPage/List file (JSON)')
     argp.add_argument('-of', '--output-file', dest='output_file',
                       help='Output AnnotationPage/List file (JSON)')
     argp.add_argument('-od', '--output-directory', dest='output_directory',
@@ -494,8 +676,8 @@ def main():
     argp.add_argument('--reference-mode', dest='reference_mode', choices=['inline', 'reference'],
                       default='reference', 
                       help='Mode of storing annotations in manifest.')
-    argp.add_argument('--annolist-url-prefix', dest='annolist_prefix',
-                      help='URL prefix for AnnotationPage/List references in manifest.')
+    argp.add_argument('--url-prefix', dest='url_prefix',
+                      help='URL prefix for AnnotationPage/List references and manifest.')
     argp.add_argument('--annolist-name-scheme', dest='annolist_name_scheme',
                       choices=['canvas', 'sequence'], default='sequence', 
                       help='Naming scheme for generated AnnotationPage/List files.')
@@ -513,6 +695,9 @@ def main():
         
     elif args.action == 'extract':
         action_extract(args)
+
+    elif args.action == 'insert':
+        action_insert(args)
 
 
 if __name__ == '__main__':
