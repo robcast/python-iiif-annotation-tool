@@ -379,6 +379,7 @@ def create_annotationpage(manifest_info):
     annopage = {
         '@context': 'http://iiif.io/api/presentation/3/context.json',
         'type': 'AnnotationPage',
+        'partOf': manifest_info['id']
     }
     annopage['items'] = manifest_info['annotations']['annotations']
     return annopage
@@ -391,6 +392,7 @@ def create_annotationlist(manifest_info):
     annopage = {
         '@context': 'http://iiif.io/api/presentation/2/context.json',
         '@type': 'sc:AnnotationList',
+        'within': manifest_info['id']
     }
     annopage['resources'] = manifest_info['annotations']['annotations']
     return annopage
@@ -421,8 +423,8 @@ def action_extract(args):
     if args.input_manifest is None:
         sys.exit('ERROR: missing input_manifest parameter!')
         
-    if args.output_annotation_file is None:
-        sys.exit('ERROR: missing output_annotation_file parameter!')
+    if args.output_file is None:
+        sys.exit('ERROR: missing output_file parameter!')
         
     logging.info(f"Reading file {args.input_manifest}")
     with open_file_or_url(args.input_manifest) as file:
@@ -433,13 +435,42 @@ def action_extract(args):
 
     with open(args.output_annotation_file, "w") as file:
         if manifest_info['manifest_version'] == 2:
-            logging.info(f"Writing IIIF V2 annotation list {args.output_annotation_file}")
+            logging.info(f"Writing IIIF V2 annotation list {args.output_file}")
             annopage = create_annotationlist(manifest_info)
         else:
-            logging.info(f"Writing IIIF V3 annotation page {args.output_annotation_file}")
+            logging.info(f"Writing IIIF V3 annotation page {args.output_file}")
             annopage = create_annotationpage(manifest_info)
             
         json.dump(annopage, file)
+
+
+def action_insert(args):
+    """
+    Action: insert annotations from AnnotationPage and save new manifest and annotation files.
+    """
+    if args.input_manifest is None:
+        sys.exit('ERROR: missing input_manifest parameter!')
+        
+    if args.output_manifest is None:
+        sys.exit('ERROR: missing output_manifest parameter!')
+        
+    logging.info(f"Reading file {args.input_manifest}")
+    with open_file_or_url(args.input_manifest) as file:
+        manif = json.load(file)
+        manifest_info = parse_manifest(manif)
+        num_annos = len(manifest_info['annotations']['annotations'])
+        logging.info(f"IIIF V{manifest_info['manifest_version']} manifest {manifest_info['id']} contains {num_annos} annotations.")
+
+    with open(args.output_annotation_file, "w") as file:
+        if manifest_info['manifest_version'] == 2:
+            logging.info(f"Writing IIIF V2 annotation list {args.output_file}")
+            annopage = create_annotationlist(manifest_info)
+        else:
+            logging.info(f"Writing IIIF V3 annotation page {args.output_file}")
+            annopage = create_annotationpage(manifest_info)
+            
+        json.dump(annopage, file)
+
 
 ##
 ## main
@@ -447,14 +478,27 @@ def action_extract(args):
 def main():
     argp = argparse.ArgumentParser(description='Manipulate annotations in IIIF manifests.')
     argp.add_argument('--version', action='version', version='%(prog)s 1.0')
-    argp.add_argument('action', choices=['check', 'extract'], 
+    argp.add_argument('action', choices=['check', 'extract', 'insert'], 
                       default='check', 
                       help='Action: check=check and print information about annotations in manifest, '
-                      + 'extract=extract annotations from manifest.')
-    argp.add_argument('-f', '--input-manifest', dest='input_manifest',
+                      + 'extract=extract annotations from manifest.'
+                      + 'insert=insert annotations and create new manifest.')
+    argp.add_argument('-i', '--input-manifest', dest='input_manifest',
                       help='Input manifest file or URL (JSON)')
-    argp.add_argument('-o', '--output-annotation-file', dest='output_annotation_file',
+    argp.add_argument('-of', '--output-file', dest='output_file',
                       help='Output AnnotationPage/List file (JSON)')
+    argp.add_argument('-od', '--output-directory', dest='output_directory',
+                      help='Output directory for AnnotationPage/List files (JSON)')
+    argp.add_argument('-om', '--output-manifest', dest='output_manifest',
+                      help='Output manifest file (JSON)')
+    argp.add_argument('--reference-mode', dest='reference_mode', choices=['inline', 'reference'],
+                      default='reference', 
+                      help='Mode of storing annotations in manifest.')
+    argp.add_argument('--annolist-url-prefix', dest='annolist_prefix',
+                      help='URL prefix for AnnotationPage/List references in manifest.')
+    argp.add_argument('--annolist-name-scheme', dest='annolist_name_scheme',
+                      choices=['canvas', 'sequence'], default='sequence', 
+                      help='Naming scheme for generated AnnotationPage/List files.')
 
     argp.add_argument('-l', '--log', dest='loglevel', choices=['INFO', 'DEBUG', 'ERROR'], default='INFO', 
                       help='Log level.')
