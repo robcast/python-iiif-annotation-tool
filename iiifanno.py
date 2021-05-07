@@ -574,11 +574,14 @@ def action_check(args):
     with open_file_or_url(args.input_manifest) as file:
         manif = json.load(file)
         manifest_info = parse_manifest(manif, None, {'mode': 'read'})
-        num_annos = len(manifest_info['annotations']['annotations'])
-        logging.info(f"IIIF V{manifest_info['manifest_version']} manifest {manifest_info['id']} contains {num_annos} annotations.")
-        if num_annos > 0:
-            logging.info(f"  on {len(manifest_info['annotations']['by_target'])} canvases")
-            logging.info(f"  annotation motivations: {manifest_info['annotations']['motivations']}")
+        annotation_info = manifest_info['annotations']
+        logging.info(f"IIIF V{manifest_info['manifest_version']} manifest {manifest_info['id']}")
+        logging.info(f"* label: '{manifest_info['label']}'")
+        logging.info(f"* {len(manifest_info['canvas_ids'])} canvases")
+        logging.info(f"* {len(annotation_info['annotations'])} annotations")
+        if len(annotation_info['annotations']) > 0:
+            logging.info(f"  * on {len(manifest_info['annotations']['by_target'])} canvases")
+            logging.info(f"  * motivations: {manifest_info['annotations']['motivations']}")
 
 
 def action_extract(args):
@@ -661,7 +664,7 @@ def main():
     argp.add_argument('action', choices=['check', 'extract', 'insert'],
                       default='check',
                       help='Action: check=check and print information about annotations in manifest, '
-                      + 'extract=extract annotations from manifest.'
+                      + 'extract=extract annotations from manifest, '
                       + 'insert=insert annotations and create new manifest.')
     argp.add_argument('-i', '--input-manifest', dest='input_manifest',
                       help='Input manifest file or URL (JSON)')
